@@ -54,6 +54,10 @@
 #define DUCKDB_EXTENSION_AUTOCOMPLETE_LINKED false
 #endif
 
+#ifndef DUCKDB_EXTENSION_OPENDAL_LINKED
+#define DUCKDB_EXTENSION_OPENDAL_LINKED false
+#endif
+
 // Load the generated header file containing our list of extension headers
 #if defined(GENERATED_EXTENSION_HEADERS) && GENERATED_EXTENSION_HEADERS && !defined(DUCKDB_AMALGAMATION)
 #include "duckdb/main/extension/generated_extension_loader.hpp"
@@ -92,6 +96,10 @@
 #include "autocomplete_extension.hpp"
 #endif
 
+#if DUCKDB_EXTENSION_OPENDAL_LINKED
+#include "opendal_extension.hpp"
+#endif
+
 #endif
 
 namespace duckdb {
@@ -125,6 +133,7 @@ static const DefaultExtension internal_extensions[] = {
     {"fts", "Adds support for Full-Text Search Indexes", false},
     {"ui", "Adds local UI for DuckDB", false},
     {"ducklake", "Adds support for DuckLake, SQL as a Lakehouse Format", false},
+    {"opendal", "Adds support for OpenDAL", DUCKDB_EXTENSION_OPENDAL_LINKED},
     {nullptr, nullptr, false}};
 
 idx_t ExtensionHelper::DefaultExtensionCount() {
@@ -412,8 +421,8 @@ void ExtensionHelper::LoadAllExtensions(DuckDB &db) {
 	// The in-tree extensions that we check. Non-cmake builds are currently limited to these for static linking
 	// TODO: rewrite package_build.py to allow also loading out-of-tree extensions in non-cmake builds, after that
 	//		 these can be removed
-	vector<string> extensions {"parquet", "icu",  "tpch",     "tpcds",        "httpfs",        "json",
-	                           "excel",   "inet", "jemalloc", "autocomplete", "core_functions"};
+	vector<string> extensions {"parquet", "icu",  "tpch",     "tpcds",        "httpfs",         "json",
+	                           "excel",   "inet", "jemalloc", "autocomplete", "core_functions", "opendal"};
 	for (auto &ext : extensions) {
 		LoadExtensionInternal(db, ext, true);
 	}
@@ -528,6 +537,13 @@ ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std
 	} else if (extension == "core_functions") {
 #if DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED
 		db.LoadStaticExtension<CoreFunctionsExtension>();
+#else
+		// core_functions extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "opendal") {
+#if DUCKDB_EXTENSION_OPENDAL_LINKED
+		db.LoadStaticExtension<OpendalExtension>();
 #else
 		// core_functions extension required but not build: skip this test
 		return ExtensionLoadResult::NOT_LOADED;
