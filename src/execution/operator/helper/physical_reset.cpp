@@ -15,11 +15,12 @@ void PhysicalReset::ResetExtensionVariable(ExecutionContext &context, DBConfig &
 		config.ResetOption(name);
 	} else {
 		auto &client_config = ClientConfig::GetConfig(context.client);
-		client_config.set_variables[name] = extension_option.default_value;
+		client_config.set_variables[name.ToStdString()] = extension_option.default_value;
 	}
 }
 
-SourceResultType PhysicalReset::GetData(ExecutionContext &context, DataChunk &chunk, OperatorSourceInput &input) const {
+SourceResultType PhysicalReset::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                OperatorSourceInput &input) const {
 	if (scope == SetScope::VARIABLE) {
 		auto &client_config = ClientConfig::GetConfig(context.client);
 		client_config.ResetUserVariable(name);
@@ -28,12 +29,13 @@ SourceResultType PhysicalReset::GetData(ExecutionContext &context, DataChunk &ch
 	auto &config = DBConfig::GetConfig(context.client);
 	config.CheckLock(name);
 	auto option = DBConfig::GetOptionByName(name);
+
 	if (!option) {
 		// check if this is an extra extension variable
-		auto entry = config.extension_parameters.find(name);
+		auto entry = config.extension_parameters.find(name.ToStdString());
 		if (entry == config.extension_parameters.end()) {
 			auto extension_name = Catalog::AutoloadExtensionByConfigName(context.client, name);
-			entry = config.extension_parameters.find(name);
+			entry = config.extension_parameters.find(name.ToStdString());
 			if (entry == config.extension_parameters.end()) {
 				throw InvalidInputException("Extension parameter %s was not found after autoloading", name);
 			}
@@ -63,16 +65,16 @@ SourceResultType PhysicalReset::GetData(ExecutionContext &context, DataChunk &ch
 		}
 		if (variable_scope == SetScope::SESSION) {
 			auto &client_config = ClientConfig::GetConfig(context.client);
-			client_config.set_variables.erase(name);
+			client_config.set_variables.erase(option->name);
 		} else {
-			config.ResetGenericOption(name);
+			config.ResetGenericOption(option->name);
 		}
 		return SourceResultType::FINISHED;
 	}
 	switch (variable_scope) {
 	case SetScope::GLOBAL: {
 		if (!option->set_global) {
-			throw CatalogException("option \"%s\" cannot be reset globally", name);
+			throw CatalogException("option \"%s\" cannot be reset globally", name.ToStdString());
 		}
 		auto &db = DatabaseInstance::GetDatabase(context.client);
 		config.ResetOption(&db, *option);
@@ -80,7 +82,7 @@ SourceResultType PhysicalReset::GetData(ExecutionContext &context, DataChunk &ch
 	}
 	case SetScope::SESSION:
 		if (!option->reset_local) {
-			throw CatalogException("option \"%s\" cannot be reset locally", name);
+			throw CatalogException("option \"%s\" cannot be reset locally", name.ToStdString());
 		}
 		option->reset_local(context.client);
 		break;

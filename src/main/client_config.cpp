@@ -8,8 +8,8 @@ bool ClientConfig::AnyVerification() const {
 	return query_verification_enabled || verify_external || verify_serializer || verify_fetch_row;
 }
 
-void ClientConfig::SetUserVariable(const string &name, Value value) {
-	user_variables[name] = std::move(value);
+void ClientConfig::SetUserVariable(const String &name, Value value) {
+	user_variables[name.ToStdString()] = std::move(value);
 }
 
 bool ClientConfig::GetUserVariable(const string &name, Value &result) {
@@ -21,8 +21,8 @@ bool ClientConfig::GetUserVariable(const string &name, Value &result) {
 	return true;
 }
 
-void ClientConfig::ResetUserVariable(const string &name) {
-	user_variables.erase(name);
+void ClientConfig::ResetUserVariable(const String &name) {
+	user_variables.erase(name.ToStdString());
 }
 
 void ClientConfig::SetDefaultStreamingBufferSize() {

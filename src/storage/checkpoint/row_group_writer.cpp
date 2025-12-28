@@ -12,13 +12,17 @@ RowGroupWriter::RowGroupWriter(TableCatalogEntry &table, PartialBlockManager &pa
 	}
 }
 
+DatabaseInstance &RowGroupWriter::GetDatabase() {
+	return table.ParentCatalog().GetDatabase();
+}
+
 SingleFileRowGroupWriter::SingleFileRowGroupWriter(TableCatalogEntry &table, PartialBlockManager &partial_block_manager,
                                                    TableDataWriter &writer, MetadataWriter &table_data_writer)
     : RowGroupWriter(table, partial_block_manager), writer(writer), table_data_writer(table_data_writer) {
 }
 
-CheckpointType SingleFileRowGroupWriter::GetCheckpointType() const {
-	return writer.GetCheckpointType();
+CheckpointOptions SingleFileRowGroupWriter::GetCheckpointOptions() const {
+	return writer.GetCheckpointOptions();
 }
 
 WriteStream &SingleFileRowGroupWriter::GetPayloadWriter() {

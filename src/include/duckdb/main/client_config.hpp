@@ -40,7 +40,7 @@ struct ClientConfig {
 	string profiler_save_location;
 	//! The custom settings for the profiler
 	//! (empty = use the default settings)
-	profiler_settings_t profiler_settings = ProfilingInfo::DefaultSettings();
+	profiler_settings_t profiler_settings = MetricsUtils::GetDefaultMetrics();
 
 	//! Allows suppressing profiler output, even if enabled. We turn on the profiler on all test runs but don't want
 	//! to output anything
@@ -79,11 +79,6 @@ struct ClientConfig {
 	//! If this context should also try to use the available replacement scans
 	//! True by default
 	bool use_replacement_scans = true;
-	//! Maximum bits allowed for using a perfect hash table (i.e. the perfect HT can hold up to 2^perfect_ht_threshold
-	//! elements)
-	idx_t perfect_ht_threshold = 12;
-	//! The maximum number of rows to accumulate before sorting ordered aggregates.
-	idx_t ordered_aggregate_threshold = (idx_t(1) << 18);
 
 	//! The maximum amount of memory to keep buffered in a streaming query result. Default: 1mb.
 	idx_t streaming_buffer_size = 1000000;
@@ -94,8 +89,6 @@ struct ClientConfig {
 	//! The explain output type used when none is specified (default: PHYSICAL_ONLY)
 	ExplainOutputType explain_output_type = ExplainOutputType::PHYSICAL_ONLY;
 
-	//! Use IEE754-compliant floating point operations (returning NAN instead of errors/NULL)
-	bool ieee_floating_point_ops = true;
 	//! If DEFAULT or ENABLE_SINGLE_ARROW, it is possible to use the deprecated single arrow operator (->) for lambda
 	//! functions. Otherwise, DISABLE_SINGLE_ARROW.
 	LambdaSyntax lambda_syntax = LambdaSyntax::DEFAULT;
@@ -128,9 +121,9 @@ public:
 
 	bool AnyVerification() const;
 
-	void SetUserVariable(const string &name, Value value);
+	void SetUserVariable(const String &name, Value value);
 	bool GetUserVariable(const string &name, Value &result);
-	void ResetUserVariable(const string &name);
+	void ResetUserVariable(const String &name);
 
 	template <class OP>
 	static typename OP::RETURN_TYPE GetSetting(const ClientContext &context) {

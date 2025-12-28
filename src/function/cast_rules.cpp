@@ -146,7 +146,6 @@ static int64_t ImplicitCastUSmallint(const LogicalType &to) {
 
 static int64_t ImplicitCastUInteger(const LogicalType &to) {
 	switch (to.id()) {
-
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::BIGINT:
 	case LogicalTypeId::UHUGEINT:
@@ -187,7 +186,6 @@ static int64_t ImplicitCastFloat(const LogicalType &to) {
 
 static int64_t ImplicitCastDouble(const LogicalType &to) {
 	switch (to.id()) {
-
 	case LogicalTypeId::BIGNUM:
 		return TargetTypeCost(to);
 	default:
@@ -302,10 +300,15 @@ static int64_t ImplicitCastBignum(const LogicalType &to) {
 	}
 }
 
+static int64_t ImplicitCastVariant(const LogicalType &to) {
+	return TargetTypeCost(to);
+}
+
 bool LogicalTypeIsValid(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::UNION:
+	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
 	case LogicalTypeId::ARRAY:
@@ -358,6 +361,10 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 	}
 	if (from.id() == LogicalTypeId::SQLNULL || to.id() == LogicalTypeId::ANY || to.id() == LogicalTypeId::TEMPLATE) {
 		// NULL expression can be cast to anything
+		return TargetTypeCost(to);
+	}
+	if (from.id() == LogicalTypeId::ANY && to.IsTemplated()) {
+		// This can happen when changing a function from using ANY to using TEMPLATE.
 		return TargetTypeCost(to);
 	}
 	if (from.id() == LogicalTypeId::UNKNOWN) {
@@ -491,7 +498,6 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 
 		int64_t cost = -1;
 		if (named_struct_cast) {
-
 			// Collect the target members in a map for easy lookup
 			case_insensitive_map_t<idx_t> target_members;
 			for (idx_t target_idx = 0; target_idx < target_children.size(); target_idx++) {
@@ -600,6 +606,8 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 		return ImplicitCastTimestamp(to);
 	case LogicalTypeId::BIGNUM:
 		return ImplicitCastBignum(to);
+	case LogicalTypeId::VARIANT:
+		return ImplicitCastVariant(to);
 	default:
 		return -1;
 	}

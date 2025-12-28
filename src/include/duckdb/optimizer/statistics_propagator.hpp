@@ -37,7 +37,7 @@ public:
 
 	//! Whether or not we can propagate a cast between two types
 	static bool CanPropagateCast(const LogicalType &source, const LogicalType &target);
-	static unique_ptr<BaseStatistics> TryPropagateCast(BaseStatistics &stats, const LogicalType &source,
+	static unique_ptr<BaseStatistics> TryPropagateCast(const BaseStatistics &stats, const LogicalType &source,
 	                                                   const LogicalType &target);
 
 private:
@@ -112,6 +112,8 @@ private:
 
 	bool ExpressionIsConstant(Expression &expr, const Value &val);
 	bool ExpressionIsConstantOrNull(Expression &expr, const Value &val);
+
+	unique_ptr<NodeStatistics> PropagateUnion(LogicalSetOperation &setop, unique_ptr<LogicalOperator> &node_ptr);
 
 private:
 	Optimizer &optimizer;

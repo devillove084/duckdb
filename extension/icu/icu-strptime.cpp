@@ -203,8 +203,8 @@ struct ICUStrptime : public ICUDateFunc {
 
 			// If we have a time zone, we should use ICU for parsing and return a TSTZ instead.
 			if (format.HasFormatSpecifier(StrTimeSpecifier::TZ_NAME)) {
-				bound_function.function = function;
-				bound_function.return_type = LogicalType::TIMESTAMP_TZ;
+				bound_function.SetFunctionCallback(function);
+				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ);
 				return make_uniq<ICUStrptimeBindData>(context, format);
 			}
 		} else if (format_value.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
@@ -221,19 +221,20 @@ struct ICUStrptime : public ICUDateFunc {
 				if (!error.empty()) {
 					throw InvalidInputException("Failed to parse format specifier %s: %s", format_string, error);
 				}
-				// If any format has UTC offsets, then we have to produce TSTZ
+				// If any format has UTC offsets or names, then we have to produce TSTZ
 				has_tz = has_tz || format.HasFormatSpecifier(StrTimeSpecifier::TZ_NAME);
+				has_tz = has_tz || format.HasFormatSpecifier(StrTimeSpecifier::UTC_OFFSET);
 				formats.emplace_back(format);
 			}
 			if (has_tz) {
-				bound_function.function = function;
-				bound_function.return_type = LogicalType::TIMESTAMP_TZ;
+				bound_function.SetFunctionCallback(function);
+				bound_function.SetReturnType(LogicalType::TIMESTAMP_TZ);
 				return make_uniq<ICUStrptimeBindData>(context, formats);
 			}
 		}
 
 		// Fall back to faster, non-TZ parsing
-		bound_function.bind = bind_strptime;
+		bound_function.SetBindCallback(bind_strptime);
 		return bind_strptime(context, bound_function, arguments);
 	}
 
@@ -253,8 +254,8 @@ struct ICUStrptime : public ICUDateFunc {
 			throw InternalException("ICU - Function for TailPatch not found");
 		}
 		auto &bound_function = functions[best_index.GetIndex()];
-		bind_strptime = bound_function.bind;
-		bound_function.bind = StrpTimeBindFunction;
+		bind_strptime = bound_function.GetBindCallback();
+		bound_function.SetBindCallback(StrpTimeBindFunction);
 	}
 
 	static void AddBinaryTimestampFunction(const string &name, ExtensionLoader &loader) {
@@ -270,14 +271,14 @@ struct ICUStrptime : public ICUDateFunc {
 		auto &info = cast_data.info->Cast<BindData>();
 		CalendarPtr cal(info.calendar->clone());
 
-		UnaryExecutor::ExecuteWithNulls<string_t, timestamp_t>(
+		UnaryExecutor::ExecuteWithNulls<string_t, timestamp_tz_t>(
 		    source, result, count, [&](string_t input, ValidityMask &mask, idx_t idx) {
-			    timestamp_t result;
+			    timestamp_tz_t result;
 			    const auto str = input.GetData();
 			    const auto len = input.GetSize();
 			    string_t tz(nullptr, 0);
 			    bool has_offset = false;
-			    auto success = Timestamp::TryConvertTimestampTZ(str, len, result, has_offset, tz);
+			    auto success = Timestamp::TryConvertTimestampTZ(str, len, result, true, has_offset, tz);
 			    if (success != TimestampCastResult::SUCCESS) {
 				    string msg;
 				    if (success == TimestampCastResult::ERROR_RANGE) {
@@ -302,7 +303,7 @@ struct ICUStrptime : public ICUDateFunc {
 				    }
 
 				    // Now get the parts in the given time zone
-				    result = FromNaive(calendar, result);
+				    result = timestamp_tz_t(FromNaive(calendar, result));
 			    }
 
 			    return result;

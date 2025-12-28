@@ -58,6 +58,10 @@ endif
 ifeq (${STATIC_LIBCPP}, 1)
 	STATIC_LIBCPP=-DSTATIC_LIBCPP=TRUE
 endif
+GIT_BASE_BRANCH:=main
+ifneq (${DUCKDB_GIT_BASE_BRANCH}, )
+	GIT_BASE_BRANCH:=${DUCKDB_GIT_BASE_BRANCH}
+endif
 
 COMMON_CMAKE_VARS ?=
 CMAKE_VARS_BUILD ?=
@@ -161,18 +165,6 @@ endif
 ifeq (${BUILD_TPCE}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DBUILD_TPCE=1
 endif
-ifeq (${BUILD_PYTHON}, 1)
-	CMAKE_VARS:=${CMAKE_VARS} -DBUILD_PYTHON=1 -DDUCKDB_EXTENSION_CONFIGS="tools/pythonpkg/duckdb_extension_config.cmake"
-endif
-ifeq (${PYTHON_USER_SPACE}, 1)
-	CMAKE_VARS:=${CMAKE_VARS} -DUSER_SPACE=1
-endif
-ifeq (${PYTHON_EDITABLE_BUILD}, 1)
-	CMAKE_VARS:=${CMAKE_VARS} -DPYTHON_EDITABLE_BUILD=1
-endif
-ifeq (${PYTHON_DEV}, 1)
-	CMAKE_VARS:=${CMAKE_VARS} -DPYTHON_DEV=1
-endif
 ifeq (${CONFIGURE_R}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DCONFIGURE_R=1
 endif
@@ -212,6 +204,9 @@ endif
 ifeq (${FORCE_ASSERT}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DFORCE_ASSERT=1
 endif
+ifeq (${FORCE_DEBUG}, 1)
+	CMAKE_VARS:=${CMAKE_VARS} -DFORCE_DEBUG=1
+endif
 ifeq (${SMALLER_BINARY}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DSMALLER_BINARY=1
 endif
@@ -238,6 +233,9 @@ ifeq (${ALTERNATIVE_VERIFY}, 1)
 endif
 ifeq (${DISABLE_POINTER_SALT}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DDISABLE_POINTER_SALT=1
+endif
+ifeq (${HASH_ZERO}, 1)
+	CMAKE_VARS:=${CMAKE_VARS} -DHASH_ZERO=1
 endif
 ifeq (${LATEST_STORAGE}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DLATEST_STORAGE=1
@@ -289,14 +287,18 @@ ifeq (${OVERRIDE_NEW_DELETE}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DOVERRIDE_NEW_DELETE=1
 endif
 ifeq (${MAIN_BRANCH_VERSIONING}, 0)
-        CMAKE_VARS:=${CMAKE_VARS} -DMAIN_BRANCH_VERSIONING=0
+	CMAKE_VARS:=${CMAKE_VARS} -DMAIN_BRANCH_VERSIONING=0
 endif
 ifeq (${MAIN_BRANCH_VERSIONING}, 1)
-        CMAKE_VARS:=${CMAKE_VARS} -DMAIN_BRANCH_VERSIONING=1
+	CMAKE_VARS:=${CMAKE_VARS} -DMAIN_BRANCH_VERSIONING=1
 endif
 ifeq (${STANDALONE_DEBUG}, 1)
-        CMAKE_VARS:=${CMAKE_VARS} -DSTANDALONE_DEBUG=1
+	CMAKE_VARS:=${CMAKE_VARS} -DSTANDALONE_DEBUG=1
 endif
+ifneq (${DUCKDB_PREBUILT_LIBRARY}, )
+	CMAKE_VARS:=${CMAKE_VARS} -DPREBUILT_BINARY=${DUCKDB_PREBUILT_LIBRARY}
+endif
+
 
 # Optional overrides
 ifneq (${STANDARD_VECTOR_SIZE}, )
@@ -321,7 +323,7 @@ ifeq (${EXPORT_DYNAMIC_SYMBOLS}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DEXPORT_DYNAMIC_SYMBOLS=1
 endif
 ifneq ("${CMAKE_LLVM_PATH}", "")
-	CMAKE_VARS:=${CMAKE_VARS} -DCMAKE_RANLIB='${CMAKE_LLVM_PATH}/bin/llvm-ranlib' -DCMAKE_AR='${CMAKE_LLVM_PATH}/bin/llvm-ar' -DCMAKE_CXX_COMPILER='${CMAKE_LLVM_PATH}/bin/clang++' -DCMAKE_C_COMPILER='${CMAKE_LLVM_PATH}/bin/clang'
+	CMAKE_VARS:=${CMAKE_VARS} -DCMAKE_RANLIB='${CMAKE_LLVM_PATH}/bin/llvm-ranlib' -DCMAKE_AR='${CMAKE_LLVM_PATH}/bin/llvm-ar' -DCMAKE_CXX_COMPILER='${CMAKE_LLVM_PATH}/bin/clang++' -DCMAKE_C_COMPILER='${CMAKE_LLVM_PATH}/bin/clang' -DCMAKE_EXE_LINKER_FLAGS_INIT='-L${CMAKE_LLVM_PATH}/lib -L${CMAKE_LLVM_PATH}/lib/c++' -DCMAKE_SHARED_LINKER_FLAGS_INIT='-L${CMAKE_LLVM_PATH}/lib -L${CMAKE_LLVM_PATH}/lib/c++'  -DCMAKE_MODULE_LINKER_FLAGS_INIT='-L${CMAKE_LLVM_PATH}/lib -L${CMAKE_LLVM_PATH}/lib/c++'
 endif
 
 CMAKE_VARS:=${CMAKE_VARS} ${COMMON_CMAKE_VARS}
@@ -334,9 +336,6 @@ endif
 
 clean:
 	rm -rf build
-
-clean-python:
-	tools/pythonpkg/clean.sh
 
 debug: ${EXTENSION_CONFIG_STEP}
 	mkdir -p ./build/debug && \
@@ -368,13 +367,13 @@ wasm_threads: ${EXTENSION_CONFIG_STEP}
 cldebug: ${EXTENSION_CONFIG_STEP}
 	mkdir -p ./build/cldebug && \
 	cd build/cldebug && \
-	cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DBUILD_PYTHON=1 -DENABLE_SANITIZER=0 -DENABLE_UBSAN=0 -DCMAKE_BUILD_TYPE=Debug ../.. && \
+	cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DENABLE_SANITIZER=0 -DENABLE_UBSAN=0 -DCMAKE_BUILD_TYPE=Debug ../.. && \
 	cmake --build . --config Debug
 
 clreldebug:
 	mkdir -p ./build/clreldebug && \
 	cd build/clreldebug && \
-	cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} -DBUILD_PYTHON=1 -DBUILD_FTS_EXTENSION=1 -DENABLE_SANITIZER=0 -DENABLE_UBSAN=0 -DCMAKE_BUILD_TYPE=RelWithDebInfo ../.. && \
+	cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} -DBUILD_FTS_EXTENSION=1 -DENABLE_SANITIZER=0 -DENABLE_UBSAN=0 -DCMAKE_BUILD_TYPE=RelWithDebInfo ../.. && \
 	cmake --build . --config RelWithDebInfo
 
 extension_configuration: build/extension_configuration/vcpkg.json
@@ -390,15 +389,12 @@ build/extension_configuration/vcpkg.json: extension/extension_config_local.cmake
 
 unittest: debug
 	build/debug/test/unittest
-	build/debug/tools/sqlite3_api_wrapper/test_sqlite3_api_wrapper
 
 unittest_release: release
 	build/release/test/unittest
-	build/release/tools/sqlite3_api_wrapper/test_sqlite3_api_wrapper
 
 unittestci:
 	$(PYTHON) scripts/run_tests_one_by_one.py build/debug/test/unittest --time_execution
-	build/debug/tools/sqlite3_api_wrapper/test_sqlite3_api_wrapper
 
 unittestarrow:
 	build/debug/test/unittest "[arrow]"
@@ -442,15 +438,15 @@ amaldebug:
 tidy-check:
 	mkdir -p ./build/tidy && \
 	cd build/tidy && \
-	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_PYTHON_PKG=TRUE -DBUILD_SHELL=0 ../.. && \
+	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_SHELL=0 ../.. && \
 	$(PYTHON) ../../scripts/run-clang-tidy.py -quiet ${TIDY_THREAD_PARAMETER} ${TIDY_BINARY_PARAMETER} ${TIDY_PERFORM_CHECKS}
 
 tidy-check-diff:
 	mkdir -p ./build/tidy && \
 	cd build/tidy && \
-	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_PYTHON_PKG=TRUE -DBUILD_SHELL=0 ../.. && \
+	cmake -DCLANG_TIDY=1 -DDISABLE_UNITY=1 -DBUILD_EXTENSIONS=parquet -DBUILD_SHELL=0 ../.. && \
 	cd ../../ && \
-	git diff origin/main . ':(exclude)tools' ':(exclude)extension' ':(exclude)test' ':(exclude)benchmark' ':(exclude)third_party' ':(exclude)src/common/adbc' ':(exclude)src/main/capi' | $(PYTHON) scripts/clang-tidy-diff.py -path build/tidy -quiet ${TIDY_THREAD_PARAMETER} ${TIDY_BINARY_PARAMETER} ${TIDY_PERFORM_CHECKS} -p1
+	git diff origin/${GIT_BASE_BRANCH} . ':(exclude)tools' ':(exclude)extension' ':(exclude)test' ':(exclude)benchmark' ':(exclude)third_party' ':(exclude)src/common/adbc' ':(exclude)src/main/capi' | $(PYTHON) scripts/clang-tidy-diff.py -path build/tidy -quiet ${TIDY_THREAD_PARAMETER} ${TIDY_BINARY_PARAMETER} ${TIDY_PERFORM_CHECKS} -p1
 
 tidy-fix:
 	mkdir -p ./build/tidy && \
@@ -524,10 +520,9 @@ generate-files:
 	$(PYTHON) scripts/generate_settings.py
 	$(PYTHON) scripts/generate_serialization.py
 	$(PYTHON) scripts/generate_storage_info.py
-	$(PYTHON) scripts/generate_enum_util.py
 	$(PYTHON) scripts/generate_metric_enums.py
+	$(PYTHON) scripts/generate_enum_util.py
 	$(PYTHON) scripts/generate_builtin_types.py
-	-@$(PYTHON) tools/pythonpkg/scripts/generate_connection_code.py || echo "Warning: generate_connection_code.py failed, cxxheaderparser & pcpp are required to perform this step"
 # Run the formatter again after (re)generating the files
 	$(MAKE) format-main
 
@@ -538,6 +533,7 @@ bundle-setup:
 	cp src/libduckdb_static.a bundle/. && \
 	cp third_party/*/libduckdb_*.a bundle/. && \
 	cp extension/*/lib*_extension.a bundle/. && \
+	mkdir -p vcpkg_installed && \
 	find vcpkg_installed -name '*.a' -exec cp {} bundle/. \; && \
 	cd bundle && \
 	find . -name '*.a' -exec mkdir -p {}.objects \; -exec mv {} {}.objects \; && \

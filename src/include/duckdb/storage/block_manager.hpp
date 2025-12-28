@@ -24,6 +24,8 @@ class ClientContext;
 class DatabaseInstance;
 class MetadataManager;
 
+enum class ConvertToPersistentMode { DESTRUCTIVE, THREAD_SAFE };
+
 //! BlockManager is an abstract representation to manage blocks on DuckDB. When writing or reading blocks, the
 //! BlockManager creates and accesses blocks. The concrete types implement specific block storage strategies.
 class BlockManager {
@@ -37,16 +39,23 @@ public:
 	BufferManager &buffer_manager;
 
 public:
+	BufferManager &GetBufferManager() const {
+		return buffer_manager;
+	}
 	//! Creates a new block inside the block manager
 	virtual unique_ptr<Block> ConvertBlock(block_id_t block_id, FileBuffer &source_buffer) = 0;
 	virtual unique_ptr<Block> CreateBlock(block_id_t block_id, FileBuffer *source_buffer) = 0;
 	//! Return the next free block id
 	virtual block_id_t GetFreeBlockId() = 0;
 	virtual block_id_t PeekFreeBlockId() = 0;
+	//! Returns the next free block id and immediately include it in the checkpoint
+	// Equivalent to calling GetFreeBlockId() followed by MarkBlockAsCheckpointed
+	virtual block_id_t GetFreeBlockIdForCheckpoint() = 0;
+
 	//! Returns whether or not a specified block is the root block
 	virtual bool IsRootBlock(MetaBlockPointer root) = 0;
-	//! Mark a block as "free"; free blocks are immediately added to the free list and can be immediately overwritten
-	virtual void MarkBlockAsFree(block_id_t block_id) = 0;
+	//! Mark a block as included in the next checkpoint
+	virtual void MarkBlockACheckpointed(block_id_t block_id) = 0;
 	//! Mark a block as "used"; either the block is removed from the free list, or the reference count is incremented
 	virtual void MarkBlockAsUsed(block_id_t block_id) = 0;
 	//! Mark a block as "modified"; modified blocks are added to the free list after a checkpoint (i.e. their data is
@@ -58,7 +67,8 @@ public:
 	//! Get the first meta block id
 	virtual idx_t GetMetaBlock() = 0;
 	//! Read the content of the block from disk
-	virtual void Read(Block &block) = 0;
+	virtual void Read(QueryContext context, Block &block) = 0;
+
 	//! Read the content of the block from disk
 	virtual void ReadBlocks(FileBuffer &buffer, block_id_t start_block, idx_t block_count) = 0;
 	//! Writes the block to disk.
@@ -81,6 +91,10 @@ public:
 	}
 	//! Whether or not the attached database is in-memory
 	virtual bool InMemory() = 0;
+	//! Whether or not to prefetch
+	virtual bool Prefetch() {
+		return false;
+	}
 
 	//! Sync changes made to the block manager
 	virtual void FileSync() = 0;
@@ -90,14 +104,19 @@ public:
 	//! Register a block with the given block id in the base file
 	shared_ptr<BlockHandle> RegisterBlock(block_id_t block_id);
 	//! Convert an existing in-memory buffer into a persistent disk-backed block
+	//! If mode is set to destructive (default) - the old_block will be destroyed as part of this method
+	//! This can only be safely used when there is no other (lingering) usage of old_block
+	//! If there is concurrent usage of the block elsewhere - use the THREAD_SAFE mode which creates an extra copy
 	shared_ptr<BlockHandle> ConvertToPersistent(QueryContext context, block_id_t block_id,
-	                                            shared_ptr<BlockHandle> old_block, BufferHandle old_handle);
+	                                            shared_ptr<BlockHandle> old_block, BufferHandle old_handle,
+	                                            ConvertToPersistentMode mode = ConvertToPersistentMode::DESTRUCTIVE);
 	shared_ptr<BlockHandle> ConvertToPersistent(QueryContext context, block_id_t block_id,
-	                                            shared_ptr<BlockHandle> old_block);
+	                                            shared_ptr<BlockHandle> old_block,
+	                                            ConvertToPersistentMode mode = ConvertToPersistentMode::DESTRUCTIVE);
 
 	void UnregisterBlock(BlockHandle &block);
 	//! UnregisterBlock, only accepts non-temporary block ids
-	void UnregisterBlock(block_id_t id);
+	virtual void UnregisterBlock(block_id_t id);
 
 	//! Returns a reference to the metadata manager of this block manager.
 	MetadataManager &GetMetadataManager();
@@ -146,6 +165,24 @@ public:
 	virtual void VerifyBlocks(const unordered_map<block_id_t, idx_t> &block_usage_count) {
 	}
 
+protected:
+	bool BlockIsRegistered(block_id_t block_id);
+
+public:
+	template <class TARGET>
+	TARGET &Cast() {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		DynamicCastCheck<TARGET>(this);
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+
+protected:
+	bool in_destruction = false;
+
 private:
 	//! The lock for the set of blocks
 	mutex blocks_lock;
@@ -162,4 +199,11 @@ private:
 	//! Default to default_block_header_size for file-backed block managers.
 	optional_idx block_header_size;
 };
+
+struct BlockIdVisitor {
+	virtual ~BlockIdVisitor() = default;
+
+	virtual void Visit(block_id_t block_id) = 0;
+};
+
 } // namespace duckdb

@@ -22,6 +22,7 @@ namespace duckdb {
 
 class DatabaseInstance;
 struct MetadataHandle;
+enum class FreeBlockType { NEWLY_USED_BLOCK, CHECKPOINTED_BLOCK };
 
 struct EncryptionOptions {
 	//! indicates whether the db is encrypted
@@ -30,8 +31,8 @@ struct EncryptionOptions {
 	bool additional_authenticated_data = false;
 	//! derived encryption key id
 	string derived_key_id;
-	//! Cipher used for encryption
-	EncryptionTypes::CipherType cipher;
+	// //! Cipher used for encryption
+	// EncryptionTypes::CipherType cipher = EncryptionTypes::CipherType::INVALID;
 	//! key derivation function (kdf) used
 	EncryptionTypes::KeyDerivationFunction kdf = EncryptionTypes::KeyDerivationFunction::SHA256;
 	//! Key Length
@@ -48,7 +49,8 @@ struct StorageManagerOptions {
 	optional_idx storage_version;
 	optional_idx version_number;
 	optional_idx block_header_size;
-
+	//! Unique database identifier and optional encryption salt.
+	data_t db_identifier[MainHeader::DB_IDENTIFIER_LEN];
 	EncryptionOptions encryption_options;
 };
 
@@ -59,6 +61,7 @@ class SingleFileBlockManager : public BlockManager {
 
 public:
 	SingleFileBlockManager(AttachedDatabase &db_p, const string &path_p, const StorageManagerOptions &options_p);
+	~SingleFileBlockManager() override;
 
 	FileOpenFlags GetFileFlags(bool create_new) const;
 	//! Creates a new database.
@@ -72,22 +75,27 @@ public:
 	unique_ptr<Block> CreateBlock(block_id_t block_id, FileBuffer *source_buffer) override;
 	//! Return the next free block id
 	block_id_t GetFreeBlockId() override;
+	//! Return the next free block id
+	block_id_t GetFreeBlockIdForCheckpoint() override;
 	//! Check the next free block id - but do not assign or allocate it
 	block_id_t PeekFreeBlockId() override;
 	//! Returns whether or not a specified block is the root block
 	bool IsRootBlock(MetaBlockPointer root) override;
-	//! Mark a block as free (immediately re-writeable)
-	void MarkBlockAsFree(block_id_t block_id) override;
+	//! Mark a block as included in a checkpoint
+	void MarkBlockACheckpointed(block_id_t block_id) override;
 	//! Mark a block as used (no longer re-writeable)
 	void MarkBlockAsUsed(block_id_t block_id) override;
 	//! Mark a block as modified (re-writeable after a checkpoint)
 	void MarkBlockAsModified(block_id_t block_id) override;
 	//! Increase the reference count of a block. The block should hold at least one reference
 	void IncreaseBlockReferenceCount(block_id_t block_id) override;
+	//! UnregisterBlock, only accepts non-temporary block ids
+	void UnregisterBlock(block_id_t id) override;
 	//! Return the meta block id
 	idx_t GetMetaBlock() override;
 	//! Read the content of the block from disk
-	void Read(Block &block) override;
+	void Read(QueryContext context, Block &block) override;
+
 	//! Read individual blocks
 	void ReadBlock(Block &block, bool skip_block_header = false) const;
 	void ReadBlock(data_ptr_t internal_buffer, uint64_t block_size, bool skip_block_header = false) const;
@@ -113,10 +121,24 @@ public:
 	idx_t FreeBlocks() override;
 	//! Whether or not the attached database is a remote file
 	bool IsRemote() override;
+	//! Whether or not to prefetch
+	bool Prefetch() override;
+
+	//! Return the checkpoint iteration of the file.
+	uint64_t GetCheckpointIteration() const {
+		return iteration_count;
+	}
+	//! Return the version number of the file.
+	uint64_t GetVersionNumber() const;
+	//! Return the database identifier.
+	data_ptr_t GetDBIdentifier() {
+		return options.db_identifier;
+	}
 
 private:
 	//! Loads the free list of the file.
-	void LoadFreeList();
+	void LoadFreeList(QueryContext context);
+
 	//! Initializes the database header. We pass the provided block allocation size as a parameter
 	//!	to detect inconsistencies with the file header.
 	void Initialize(const DatabaseHeader &header, const optional_idx block_alloc_size);
@@ -132,18 +154,18 @@ private:
 	idx_t GetBlockLocation(block_id_t block_id) const;
 
 	// Encrypt, Store, Decrypt the canary
-	static void StoreEncryptedCanary(DatabaseInstance &db, MainHeader &main_header, const string &key_id);
-	static void StoreSalt(MainHeader &main_header, data_ptr_t salt);
+	static void StoreEncryptedCanary(AttachedDatabase &db, MainHeader &main_header, const string &key_id);
+	static void StoreDBIdentifier(MainHeader &main_header, const data_ptr_t db_identifier);
 	void StoreEncryptionMetadata(MainHeader &main_header) const;
 
 	//! Check and adding Encryption Keys
 	void CheckAndAddEncryptionKey(MainHeader &main_header, string &user_key);
 	void CheckAndAddEncryptionKey(MainHeader &main_header);
-	void CheckAndAddEncryptionKey(MainHeader &main_header, DBConfigOptions &config_options);
 
 	//! Return the blocks to which we will write the free list and modified blocks
 	vector<MetadataHandle> GetFreeListBlocks();
-	void TrimFreeBlocks();
+	void TrimFreeBlocks(const set<block_id_t> &blocks);
+	void TrimFreeBlockRange(block_id_t start, block_id_t end);
 
 	void IncreaseBlockReferenceCountInternal(block_id_t block_id);
 
@@ -151,7 +173,8 @@ private:
 	void VerifyBlocks(const unordered_map<block_id_t, idx_t> &block_usage_count) override;
 
 	void AddStorageVersionTag();
-	uint64_t GetVersionNumber();
+
+	block_id_t GetFreeBlockIdInternal(FreeBlockType type);
 
 private:
 	AttachedDatabase &db;
@@ -165,13 +188,15 @@ private:
 	FileBuffer header_buffer;
 	//! The list of free blocks that can be written to currently
 	set<block_id_t> free_list;
-	//! The list of blocks that were freed since the last checkpoint.
-	set<block_id_t> newly_freed_list;
+	//! The list of blocks that have been freed, but cannot yet be re-used because they are still in-use
+	set<block_id_t> free_blocks_in_use;
+	//! The list of blocks that are in-use, but haven't been written as part of a checkpoint yet
+	set<block_id_t> newly_used_blocks;
 	//! The list of multi-use blocks (i.e. blocks that have >1 reference in the file)
 	//! When a multi-use block is marked as modified, the reference count is decreased by 1 instead of directly
 	//! Appending the block to the modified_blocks list
 	unordered_map<block_id_t, uint32_t> multi_use_blocks;
-	//! The list of blocks that will be added to the free list
+	//! The list of blocks that are no longer in-use, but cannot be re-used until the next checkpoint
 	unordered_set<block_id_t> modified_blocks;
 	//! The current meta block id
 	idx_t meta_block;
@@ -179,7 +204,7 @@ private:
 	block_id_t max_block;
 	//! The block id where the free list can be found
 	idx_t free_list_id;
-	//! The current header iteration count
+	//! The current header iteration count.
 	uint64_t iteration_count;
 	//! The storage manager options
 	StorageManagerOptions options;

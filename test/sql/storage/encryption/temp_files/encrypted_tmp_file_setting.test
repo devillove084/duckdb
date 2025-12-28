@@ -3,14 +3,11 @@
 
 require block_size 262144
 
+# httpfs require to write encrypted data
+require httpfs
+
 statement ok
 SET temp_directory='__TEST_DIR__/test_temp_dir'
-
-statement ok
-ATTACH '__TEST_DIR__/encrypted_temp_files.db' AS enc (ENCRYPTION_KEY 'asdf');
-
-statement ok
-USE enc;
 
 # we do not encrypt temporary files at all
 statement ok

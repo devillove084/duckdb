@@ -27,6 +27,7 @@ BindResult ExpressionBinder::TryBindLambdaOrJson(FunctionExpression &function, i
 	auto setting = config.lambda_syntax;
 	bool invalid_syntax =
 	    setting == LambdaSyntax::DISABLE_SINGLE_ARROW && syntax_type == LambdaSyntaxType::SINGLE_ARROW;
+	bool warn_deprecated_syntax = setting == LambdaSyntax::DEFAULT && syntax_type == LambdaSyntaxType::SINGLE_ARROW;
 	const string msg = "Deprecated lambda arrow (->) detected. Please transition to the new lambda syntax, "
 	                   "i.e.., lambda x, i: x + i, before DuckDB's next release. \n"
 	                   "Use SET lambda_syntax='ENABLE_SINGLE_ARROW' to revert to the deprecated behavior. \n"
@@ -49,11 +50,18 @@ BindResult ExpressionBinder::TryBindLambdaOrJson(FunctionExpression &function, i
 
 	if (!lambda_bind_result.HasError()) {
 		if (!invalid_syntax) {
+			if (warn_deprecated_syntax) {
+				DUCKDB_LOG_WARNING(context, msg);
+			}
 			return lambda_bind_result;
 		}
 		return BindResult(msg);
 	}
 	if (StringUtil::Contains(lambda_bind_result.error.RawMessage(), "Deprecated lambda arrow (->) detected.")) {
+		if (warn_deprecated_syntax) {
+			DUCKDB_LOG_WARNING(context, msg);
+		}
+
 		return lambda_bind_result;
 	}
 
@@ -68,8 +76,8 @@ BindResult ExpressionBinder::TryBindLambdaOrJson(FunctionExpression &function, i
 	                  json_bind_result.error.RawMessage());
 }
 
-BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t depth,
-                                            unique_ptr<ParsedExpression> &expr_ptr) {
+optional_ptr<CatalogEntry> ExpressionBinder::BindAndQualifyFunction(FunctionExpression &function, bool allow_throw) {
+	D_ASSERT(!IsUnnestFunction(function.function_name));
 	// lookup the function in the catalog
 	QueryErrorContext error_context(function.GetQueryLocation());
 	binder.BindSchemaOrCatalog(function.catalog, function.schema);
@@ -82,6 +90,9 @@ BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t 
 		auto table_func =
 		    GetCatalogEntry(function.catalog, function.schema, table_function_lookup, OnEntryNotFound::RETURN_NULL);
 		if (table_func) {
+			if (!allow_throw) {
+				return func;
+			}
 			throw BinderException(function,
 			                      "Function \"%s\" is a table function but it was used as a scalar function. This "
 			                      "function has to be called in a FROM clause (similar to a table).",
@@ -104,7 +115,10 @@ BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t 
 				auto new_colref = QualifyColumnName(*colref, error);
 				if (error.HasError()) {
 					// could not find the column - try to qualify the alias
-					if (!QualifyColumnAlias(*colref)) {
+					if (!DoesColumnAliasExist(*colref)) {
+						if (!allow_throw) {
+							return func;
+						}
 						// no alias found either - throw
 						error.Throw();
 					}
@@ -118,10 +132,18 @@ BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t 
 		}
 		// rebind the function
 		if (!func) {
-			func =
-			    GetCatalogEntry(function.catalog, function.schema, function_lookup, OnEntryNotFound::THROW_EXCEPTION);
+			const auto on_entry_not_found =
+			    allow_throw ? OnEntryNotFound::THROW_EXCEPTION : OnEntryNotFound::RETURN_NULL;
+			func = GetCatalogEntry(function.catalog, function.schema, function_lookup, on_entry_not_found);
 		}
 	}
+
+	return func;
+}
+
+BindResult ExpressionBinder::BindExpression(FunctionExpression &function, idx_t depth,
+                                            unique_ptr<ParsedExpression> &expr_ptr) {
+	auto func = BindAndQualifyFunction(function, true);
 
 	if (func->type != CatalogType::AGGREGATE_FUNCTION_ENTRY &&
 	    (function.distinct || function.filter || !function.order_bys->orders.empty())) {
@@ -181,7 +203,7 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 	}
 	if (result->GetExpressionType() == ExpressionType::BOUND_FUNCTION) {
 		auto &bound_function = result->Cast<BoundFunctionExpression>();
-		if (bound_function.function.stability == FunctionStability::CONSISTENT_WITHIN_QUERY) {
+		if (bound_function.function.GetStability() == FunctionStability::CONSISTENT_WITHIN_QUERY) {
 			binder.SetAlwaysRequireRebind();
 		}
 	}
@@ -190,10 +212,9 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 
 BindResult ExpressionBinder::BindLambdaFunction(FunctionExpression &function, ScalarFunctionCatalogEntry &func,
                                                 idx_t depth) {
-
 	// get the callback function for the lambda parameter types
 	auto &scalar_function = func.functions.functions.front();
-	auto &bind_lambda_function = scalar_function.bind_lambda;
+	auto bind_lambda_function = scalar_function.GetBindLambdaCallback();
 	if (!bind_lambda_function) {
 		return BindResult("This scalar function does not support lambdas!");
 	}
@@ -288,13 +309,14 @@ BindResult ExpressionBinder::BindLambdaFunction(FunctionExpression &function, Sc
 	idx_t offset = 0;
 	if (lambda_bindings) {
 		for (idx_t i = lambda_bindings->size(); i > 0; i--) {
-
 			auto &binding = (*lambda_bindings)[i - 1];
-			D_ASSERT(binding.names.size() == binding.types.size());
+			auto &column_names = binding.GetColumnNames();
+			auto &column_types = binding.GetColumnTypes();
+			D_ASSERT(column_names.size() == column_types.size());
 
-			for (idx_t column_idx = binding.names.size(); column_idx > 0; column_idx--) {
-				auto bound_lambda_param = make_uniq<BoundReferenceExpression>(binding.names[column_idx - 1],
-				                                                              binding.types[column_idx - 1], offset);
+			for (idx_t column_idx = column_names.size(); column_idx > 0; column_idx--) {
+				auto bound_lambda_param = make_uniq<BoundReferenceExpression>(column_names[column_idx - 1],
+				                                                              column_types[column_idx - 1], offset);
 				offset++;
 				bound_function_expr.children.push_back(std::move(bound_lambda_param));
 			}
