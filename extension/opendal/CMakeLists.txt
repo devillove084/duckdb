@@ -41,6 +41,8 @@ ExternalProject_Add(
 
 set(EXTENSION_SOURCES
   opendal_extension.cpp
+  opendal_filesystem.cpp
+  opendal_scan_function.cpp
 )
 
 include_directories("${OPENDAL_SRC_DIR}/bindings/cpp/target/cxxbridge")

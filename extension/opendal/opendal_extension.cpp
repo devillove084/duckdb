@@ -7,7 +7,7 @@ void OpendalExtension::Load(ExtensionLoader &loader) {
 	std::string data {"1243"};
 	op.Write("test", data);
 	auto result = op.Read("test");
-	std::cerr << "[opendal] smoketest read back: " << result << std::endl;
+	std::cerr << "[opendal] smoketest read back: " << result << '\n';
 }
 
 std::string OpendalExtension::Name() {
